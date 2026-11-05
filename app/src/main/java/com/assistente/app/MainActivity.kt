@@ -15,7 +15,7 @@ import kotlin.concurrent.thread
 
 class MainActivity : Activity() {
 
-    private val modelo = "llama-3.3-70b-versatile"
+    private val modelo = "openai/gpt-oss-120b"
     private val historico = JSONArray()
     private lateinit var chat: TextView
     private lateinit var rolagem: ScrollView

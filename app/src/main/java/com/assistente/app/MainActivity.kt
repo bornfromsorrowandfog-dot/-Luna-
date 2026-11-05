@@ -16,15 +16,25 @@ import android.view.ViewGroup
 import android.widget.*
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import kotlin.concurrent.thread
 
 class MainActivity : Activity() {
 
     private val modelo = "openai/gpt-oss-120b"
-    private val historico = JSONArray()
+    private val maxMensagens = 30
+    private val personalidade =
+        "Você é um assistente pessoal. Responda em português do Brasil, de forma curta e direta. " +
+            "Suas respostas serão lidas em voz alta, então não use listas, asteriscos nem emojis."
+
+    private var conversas = JSONArray()
+    private var atual: JSONObject = JSONObject()
+
     private lateinit var chat: TextView
     private lateinit var rolagem: ScrollView
     private lateinit var entrada: EditText
@@ -43,27 +53,18 @@ class MainActivity : Activity() {
         raiz.orientation = LinearLayout.VERTICAL
         raiz.setPadding(32, 120, 32, 32)
 
-        val topo = LinearLayout(this)
-        topo.orientation = LinearLayout.HORIZONTAL
-        val botaoChave = Button(this)
-        botaoChave.text = "Chave do Groq"
-        botaoChave.setOnClickListener { pedirChave() }
-        topo.addView(
-            botaoChave,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        )
-        botaoVoz = Button(this)
-        botaoVoz.text = "Voz: ligada"
-        botaoVoz.setOnClickListener {
+        botaoVoz = criarBotao("Voz: ligada") {
             falarRespostas = !falarRespostas
             botaoVoz.text = if (falarRespostas) "Voz: ligada" else "Voz: desligada"
             if (!falarRespostas) tts?.stop()
         }
-        topo.addView(
-            botaoVoz,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        raiz.addView(linhaDeBotoes(criarBotao("Chave do Groq") { pedirChave() }, botaoVoz))
+        raiz.addView(
+            linhaDeBotoes(
+                criarBotao("Histórico") { mostrarHistorico() },
+                criarBotao("Novo chat") { novoChat() }
+            )
         )
-        raiz.addView(topo)
 
         rolagem = ScrollView(this)
         chat = TextView(this)
@@ -75,9 +76,7 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         )
 
-        botaoMic = Button(this)
-        botaoMic.text = "Falar"
-        botaoMic.setOnClickListener { iniciarEscuta() }
+        botaoMic = criarBotao("Falar") { iniciarEscuta() }
         raiz.addView(botaoMic)
 
         val linha = LinearLayout(this)
@@ -89,23 +88,10 @@ class MainActivity : Activity() {
             entrada,
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         )
-        val botaoEnviar = Button(this)
-        botaoEnviar.text = "Enviar"
-        botaoEnviar.setOnClickListener { enviarMensagem() }
-        linha.addView(botaoEnviar)
+        linha.addView(criarBotao("Enviar") { enviarMensagem() })
         raiz.addView(linha)
 
         setContentView(raiz)
-
-        historico.put(
-            JSONObject()
-                .put("role", "system")
-                .put(
-                    "content",
-                    "Você é um assistente pessoal. Responda em português do Brasil, de forma curta e direta. " +
-                        "Suas respostas serão lidas em voz alta, então não use listas, asteriscos nem emojis."
-                )
-        )
 
         tts = TextToSpeech(this) { status ->
             if (status == TextToSpeech.SUCCESS) {
@@ -113,6 +99,10 @@ class MainActivity : Activity() {
                 ttsPronto = true
             }
         }
+
+        carregar()
+        atual = ultimaConversa() ?: novaConversa()
+        redesenhar()
 
         if (chave().isEmpty()) pedirChave()
     }
@@ -122,6 +112,152 @@ class MainActivity : Activity() {
         reconhecedor?.destroy()
         super.onDestroy()
     }
+
+    // ---------- interface ----------
+
+    private fun criarBotao(texto: String, acao: () -> Unit): Button {
+        val b = Button(this)
+        b.text = texto
+        b.setOnClickListener { acao() }
+        return b
+    }
+
+    private fun linhaDeBotoes(vararg botoes: Button): LinearLayout {
+        val l = LinearLayout(this)
+        l.orientation = LinearLayout.HORIZONTAL
+        for (b in botoes) {
+            l.addView(
+                b,
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            )
+        }
+        return l
+    }
+
+    private fun mostrar(texto: String) {
+        chat.append(texto + "\n\n")
+        rolagem.post { rolagem.fullScroll(ScrollView.FOCUS_DOWN) }
+    }
+
+    private fun redesenhar() {
+        chat.text = ""
+        val msgs = atual.getJSONArray("mensagens")
+        for (i in 0 until msgs.length()) {
+            val m = msgs.getJSONObject(i)
+            val quem = if (m.getString("role") == "user") "Você" else "Assistente"
+            chat.append(quem + ": " + m.getString("content") + "\n\n")
+        }
+        rolagem.post { rolagem.fullScroll(ScrollView.FOCUS_DOWN) }
+    }
+
+    // ---------- histórico ----------
+
+    private fun arquivo() = File(filesDir, "conversas.json")
+
+    private fun novaConversa(): JSONObject {
+        return JSONObject()
+            .put("id", System.currentTimeMillis())
+            .put("titulo", "Nova conversa")
+            .put("atualizado", System.currentTimeMillis())
+            .put("mensagens", JSONArray())
+    }
+
+    private fun carregar() {
+        conversas = try {
+            if (arquivo().exists()) JSONArray(arquivo().readText()) else JSONArray()
+        } catch (e: Exception) {
+            JSONArray()
+        }
+    }
+
+    private fun ultimaConversa(): JSONObject? {
+        var melhor: JSONObject? = null
+        for (i in 0 until conversas.length()) {
+            val c = conversas.getJSONObject(i)
+            if (melhor == null || c.getLong("atualizado") > melhor.getLong("atualizado")) {
+                melhor = c
+            }
+        }
+        return melhor
+    }
+
+    private fun gravar(conv: JSONObject) {
+        if (conv.getJSONArray("mensagens").length() == 0) return
+        conv.put("atualizado", System.currentTimeMillis())
+        var achou = false
+        for (i in 0 until conversas.length()) {
+            if (conversas.getJSONObject(i).getLong("id") == conv.getLong("id")) {
+                conversas.put(i, conv)
+                achou = true
+                break
+            }
+        }
+        if (!achou) conversas.put(conv)
+        try {
+            arquivo().writeText(conversas.toString())
+        } catch (e: Exception) {
+        }
+    }
+
+    private fun novoChat() {
+        tts?.stop()
+        atual = novaConversa()
+        redesenhar()
+    }
+
+    private fun mostrarHistorico() {
+        val lista = ArrayList<JSONObject>()
+        for (i in 0 until conversas.length()) lista.add(conversas.getJSONObject(i))
+        if (lista.isEmpty()) {
+            mostrar("Nenhuma conversa salva ainda.")
+            return
+        }
+        lista.sortByDescending { it.getLong("atualizado") }
+        val formato = SimpleDateFormat("dd/MM HH:mm", Locale("pt", "BR"))
+        val titulos = lista.map {
+            formato.format(Date(it.getLong("atualizado"))) + " - " + it.getString("titulo")
+        }.toTypedArray()
+
+        val dialogo = AlertDialog.Builder(this)
+            .setTitle("Conversas (segure para apagar)")
+            .setItems(titulos) { _, which ->
+                tts?.stop()
+                atual = lista[which]
+                redesenhar()
+            }
+            .setNegativeButton("Fechar", null)
+            .show()
+
+        dialogo.listView.setOnItemLongClickListener { _, _, pos, _ ->
+            AlertDialog.Builder(this)
+                .setTitle("Apagar esta conversa?")
+                .setMessage(lista[pos].getString("titulo"))
+                .setPositiveButton("Apagar") { _, _ ->
+                    apagar(lista[pos])
+                    dialogo.dismiss()
+                }
+                .setNegativeButton("Cancelar", null)
+                .show()
+            true
+        }
+    }
+
+    private fun apagar(c: JSONObject) {
+        val id = c.getLong("id")
+        val nova = JSONArray()
+        for (i in 0 until conversas.length()) {
+            val o = conversas.getJSONObject(i)
+            if (o.getLong("id") != id) nova.put(o)
+        }
+        conversas = nova
+        try {
+            arquivo().writeText(conversas.toString())
+        } catch (e: Exception) {
+        }
+        if (atual.getLong("id") == id) novoChat()
+    }
+
+    // ---------- chave ----------
 
     private fun chave(): String {
         return getSharedPreferences("cfg", Context.MODE_PRIVATE).getString("chave", "") ?: ""
@@ -143,10 +279,7 @@ class MainActivity : Activity() {
             .show()
     }
 
-    private fun mostrar(texto: String) {
-        chat.append(texto + "\n\n")
-        rolagem.post { rolagem.fullScroll(ScrollView.FOCUS_DOWN) }
-    }
+    // ---------- voz ----------
 
     private fun falar(texto: String) {
         if (falarRespostas && ttsPronto) {
@@ -218,6 +351,8 @@ class MainActivity : Activity() {
         reconhecedor?.startListening(intent)
     }
 
+    // ---------- conversa com a IA ----------
+
     private fun enviarMensagem() {
         val texto = entrada.text.toString().trim()
         if (texto.isEmpty()) return
@@ -225,34 +360,58 @@ class MainActivity : Activity() {
         enviar(texto)
     }
 
+    private fun montarMensagens(conv: JSONObject): JSONArray {
+        val arr = JSONArray()
+        arr.put(JSONObject().put("role", "system").put("content", personalidade))
+        val msgs = conv.getJSONArray("mensagens")
+        val inicio = maxOf(0, msgs.length() - maxMensagens)
+        for (i in inicio until msgs.length()) arr.put(msgs.getJSONObject(i))
+        return arr
+    }
+
     private fun enviar(texto: String) {
         if (chave().isEmpty()) {
             pedirChave()
             return
         }
+        val conv = atual
+        val msgs = conv.getJSONArray("mensagens")
+        if (msgs.length() == 0) conv.put("titulo", texto.take(40))
+        msgs.put(JSONObject().put("role", "user").put("content", texto))
+        gravar(conv)
         mostrar("Você: $texto")
-        historico.put(JSONObject().put("role", "user").put("content", texto))
+
+        val paraEnviar = montarMensagens(conv)
         thread {
+            var deuErro = false
             val resposta = try {
-                perguntarGroq()
+                perguntarGroq(paraEnviar)
             } catch (e: Exception) {
-                "Erro: ${e.message}"
+                deuErro = true
+                "Erro: " + e.message
             }
             runOnUiThread {
-                mostrar("Assistente: $resposta")
-                if (!resposta.startsWith("Erro")) falar(resposta)
+                if (!deuErro) {
+                    conv.getJSONArray("mensagens")
+                        .put(JSONObject().put("role", "assistant").put("content", resposta))
+                    gravar(conv)
+                }
+                if (conv === atual) {
+                    mostrar("Assistente: $resposta")
+                    if (!deuErro) falar(resposta)
+                }
             }
         }
     }
 
-    private fun perguntarGroq(): String {
-        val corpo = JSONObject().put("model", modelo).put("messages", historico)
+    private fun perguntarGroq(mensagens: JSONArray): String {
+        val corpo = JSONObject().put("model", modelo).put("messages", mensagens)
         val con = URL("https://api.groq.com/openai/v1/chat/completions")
             .openConnection() as HttpURLConnection
         con.requestMethod = "POST"
         con.setRequestProperty("Authorization", "Bearer " + chave())
         con.setRequestProperty("Content-Type", "application/json")
-        con.setRequestProperty("User-Agent", "assistente-app/0.2")
+        con.setRequestProperty("User-Agent", "assistente-app/0.3")
         con.connectTimeout = 15000
         con.readTimeout = 60000
         con.doOutput = true
@@ -261,15 +420,12 @@ class MainActivity : Activity() {
         val codigo = con.responseCode
         val fluxo = if (codigo in 200..299) con.inputStream else con.errorStream
         val texto = fluxo?.bufferedReader()?.use { it.readText() } ?: ""
-        if (codigo !in 200..299) return "Erro $codigo: $texto"
+        if (codigo !in 200..299) throw Exception("HTTP $codigo: $texto")
 
-        val conteudo = JSONObject(texto)
+        return JSONObject(texto)
             .getJSONArray("choices")
             .getJSONObject(0)
             .getJSONObject("message")
             .getString("content")
-        historico.put(JSONObject().put("role", "assistant").put("content", conteudo))
-        return conteudo
     }
 }
- 

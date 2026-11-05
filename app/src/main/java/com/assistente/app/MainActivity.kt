@@ -548,10 +548,63 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun perguntarGroq(mensagens: JSONArray): String {
-        val corpo = JSONObject().put("model", modelo).put("messages", mensagens)
+        private fun perguntarGroq(mensagens: JSONArray): String {
+        val corpo = JSONObject()
+            .put("model", modelo)
+            .put("messages", mensagens)
+
         val con = URL("https://api.groq.com/openai/v1/chat/completions")
             .openConnection() as HttpURLConnection
+
         con.requestMethod = "POST"
         con.setRequestProperty("Authorization", "Bearer " + chave())
-        con.setRequestProperty("Content-Type", 
+        con.setRequestProperty("Content-Type", "application/json")
+
+        con.connectTimeout = 15000
+        con.readTimeout = 30000
+        con.doOutput = true
+
+        try {
+            con.outputStream.use { saida ->
+                saida.write(corpo.toString().toByteArray(Charsets.UTF_8))
+            }
+
+            val codigo = con.responseCode
+
+            val fluxo = if (codigo in 200..299) {
+                con.inputStream
+            } else {
+                con.errorStream
+            }
+
+            val resposta = fluxo?.bufferedReader(Charsets.UTF_8)?.use {
+                it.readText()
+            } ?: ""
+
+            if (codigo !in 200..299) {
+                val detalhe = try {
+                    JSONObject(resposta)
+                        .optJSONObject("error")
+                        ?.optString("message")
+                } catch (e: Exception) {
+                    null
+                }
+
+                throw Exception(
+                    detalhe ?: "Erro HTTP $codigo: $resposta"
+                )
+            }
+
+            val json = JSONObject(resposta)
+
+            return json
+                .getJSONArray("choices")
+                .getJSONObject(0)
+                .getJSONObject("message")
+                .getString("content")
+
+        } finally {
+            con.disconnect()
+        }
+    }
+}

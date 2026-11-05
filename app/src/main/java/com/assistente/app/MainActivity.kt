@@ -3,10 +3,14 @@ package com.assistente.app
 import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
+import android.app.SearchManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
+import android.provider.ContactsContract
+import android.provider.MediaStore
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -30,7 +34,18 @@ class MainActivity : Activity() {
     private val maxMensagens = 30
     private val personalidade =
         "Você é um assistente pessoal. Responda em português do Brasil, de forma curta e direta. " +
-            "Suas respostas serão lidas em voz alta, então não use listas, asteriscos nem emojis."
+            "Suas respostas serão lidas em voz alta, então não use listas, asteriscos nem emojis. " +
+            "Você pode executar ações no celular do usuário. Só faça isso quando ele pedir. " +
+            "Para executar, diga em uma frase curta o que vai fazer e escreva, no FINAL da resposta, " +
+            "uma única linha neste formato exato, sem nada depois dela: [[ACAO|tipo|parametro1|parametro2]]. " +
+            "Tipos disponíveis: " +
+            "abrir_app|nome do app (exemplo: [[ACAO|abrir_app|Spotify]]); " +
+            "musica|nome da música ou artista (exemplo: [[ACAO|musica|Linkin Park In the End]]); " +
+            "whatsapp|nome do contato ou número|texto da mensagem " +
+            "(exemplo: [[ACAO|whatsapp|Maria|Oi, tudo bem?]]). " +
+            "Use no máximo uma ação por resposta. Se faltar informação, pergunte antes."
+
+    private val regexAcao = Regex("\\[\\[ACAO\\|(.*?)\\]\\]", RegexOption.DOT_MATCHES_ALL)
 
     private var conversas = JSONArray()
     private var atual: JSONObject = JSONObject()
@@ -302,12 +317,15 @@ class MainActivity : Activity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 1 && grantResults.isNotEmpty() &&
-            grantResults[0] == PackageManager.PERMISSION_GRANTED
-        ) {
-            ouvir()
-        } else {
-            mostrar("Sem permissão do microfone, a voz não funciona.")
+        val ok = grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED
+        if (requestCode == 1) {
+            if (ok) ouvir() else mostrar("Sem permissão do microfone, a voz não funciona.")
+        } else if (requestCode == 2) {
+            if (ok) {
+                mostrar("Permissão de contatos concedida. Peça de novo.")
+            } else {
+                mostrar("Sem permissão de contatos, só consigo usar números de telefone.")
+            }
         }
     }
 
@@ -351,6 +369,126 @@ class MainActivity : Activity() {
         reconhecedor?.startListening(intent)
     }
 
+    // ---------- ações no celular ----------
+
+    private fun descrever(p: List<String>): String {
+        val a = p.getOrElse(1) { "" }.trim()
+        val b = p.getOrElse(2) { "" }.trim()
+        return when (p[0].trim()) {
+            "abrir_app" -> "Abrir o app \"" + a + "\""
+            "musica" -> "Tocar música: " + a
+            "whatsapp" -> "Abrir o WhatsApp com " + a + " e preparar a mensagem:\n\n" + b
+            else -> "Ação desconhecida: " + p[0]
+        }
+    }
+
+    private fun confirmarAcao(partes: List<String>) {
+        AlertDialog.Builder(this)
+            .setTitle("Executar ação?")
+            .setMessage(descrever(partes))
+            .setPositiveButton("Sim") { _, _ -> executar(partes) }
+            .setNegativeButton("Não") { _, _ -> mostrar("Ação cancelada.") }
+            .show()
+    }
+
+    private fun executar(p: List<String>) {
+        try {
+            val a = p.getOrElse(1) { "" }
+            val b = p.getOrElse(2) { "" }
+            when (p[0].trim()) {
+                "abrir_app" -> abrirApp(a)
+                "musica" -> tocarMusica(a)
+                "whatsapp" -> enviarWhats(a, b)
+                else -> mostrar("Ação desconhecida: " + p[0])
+            }
+        } catch (e: Exception) {
+            mostrar("Não consegui executar: " + e.message)
+        }
+    }
+
+    private fun abrirApp(nome: String) {
+        val pm = packageManager
+        val base = Intent(Intent.ACTION_MAIN)
+        base.addCategory(Intent.CATEGORY_LAUNCHER)
+        val apps = pm.queryIntentActivities(base, 0)
+        val alvo = nome.trim().lowercase()
+        var pacote: String? = null
+        for (r in apps) {
+            val rotulo = r.loadLabel(pm).toString().lowercase()
+            if (rotulo == alvo) {
+                pacote = r.activityInfo.packageName
+                break
+            }
+            if (pacote == null && rotulo.contains(alvo)) {
+                pacote = r.activityInfo.packageName
+            }
+        }
+        if (pacote == null) {
+            mostrar("Não achei o app \"" + nome.trim() + "\".")
+            return
+        }
+        val i = pm.getLaunchIntentForPackage(pacote)
+        if (i == null) {
+            mostrar("Não consegui abrir esse app.")
+            return
+        }
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(i)
+    }
+
+    private fun tocarMusica(busca: String) {
+        val i = Intent(MediaStore.INTENT_ACTION_MEDIA_PLAY_FROM_SEARCH)
+        i.putExtra(MediaStore.EXTRA_MEDIA_FOCUS, "vnd.android.cursor.item/*")
+        i.putExtra(SearchManager.QUERY, busca)
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            startActivity(i)
+        } catch (e: Exception) {
+            val web = Intent(
+                Intent.ACTION_VIEW,
+                Uri.parse("https://www.youtube.com/results?search_query=" + Uri.encode(busca))
+            )
+            web.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(web)
+        }
+    }
+
+    private fun buscarNumero(nome: String): String? {
+        val c = contentResolver.query(
+            ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+            arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER),
+            ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME + " LIKE ?",
+            arrayOf("%" + nome + "%"),
+            null
+        )
+        c?.use {
+            if (it.moveToFirst()) return it.getString(0)
+        }
+        return null
+    }
+
+    private fun enviarWhats(destino: String, texto: String) {
+        var numero = destino.filter { it.isDigit() }
+        if (numero.length < 8) {
+            if (checkSelfPermission(Manifest.permission.READ_CONTACTS) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(Manifest.permission.READ_CONTACTS), 2)
+                mostrar("Preciso da permissão de contatos. Toque em Permitir e peça de novo.")
+                return
+            }
+            val achado = buscarNumero(destino.trim())
+            if (achado == null) {
+                mostrar("Não achei \"" + destino.trim() + "\" nos contatos.")
+                return
+            }
+            numero = achado.filter { it.isDigit() }
+        }
+        if (numero.length in 10..11) numero = "55" + numero
+        val uri = Uri.parse("https://wa.me/" + numero + "?text=" + Uri.encode(texto))
+        val i = Intent(Intent.ACTION_VIEW, uri)
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        startActivity(i)
+    }
+
     // ---------- conversa com a IA ----------
 
     private fun enviarMensagem() {
@@ -384,21 +522,27 @@ class MainActivity : Activity() {
         val paraEnviar = montarMensagens(conv)
         thread {
             var deuErro = false
-            val resposta = try {
+            val bruto = try {
                 perguntarGroq(paraEnviar)
             } catch (e: Exception) {
                 deuErro = true
                 "Erro: " + e.message
             }
+            val achada = if (deuErro) null else regexAcao.find(bruto)
+            var limpo = if (achada != null) bruto.replace(regexAcao, "").trim() else bruto
+            if (!deuErro && limpo.isEmpty()) limpo = "Certo."
+            val acao = achada?.groupValues?.get(1)?.split("|")
+
             runOnUiThread {
                 if (!deuErro) {
                     conv.getJSONArray("mensagens")
-                        .put(JSONObject().put("role", "assistant").put("content", resposta))
+                        .put(JSONObject().put("role", "assistant").put("content", limpo))
                     gravar(conv)
                 }
                 if (conv === atual) {
-                    mostrar("Assistente: $resposta")
-                    if (!deuErro) falar(resposta)
+                    mostrar("Assistente: $limpo")
+                    if (!deuErro) falar(limpo)
+                    if (acao != null) confirmarAcao(acao)
                 }
             }
         }
@@ -410,22 +554,4 @@ class MainActivity : Activity() {
             .openConnection() as HttpURLConnection
         con.requestMethod = "POST"
         con.setRequestProperty("Authorization", "Bearer " + chave())
-        con.setRequestProperty("Content-Type", "application/json")
-        con.setRequestProperty("User-Agent", "assistente-app/0.3")
-        con.connectTimeout = 15000
-        con.readTimeout = 60000
-        con.doOutput = true
-        con.outputStream.use { it.write(corpo.toString().toByteArray()) }
-
-        val codigo = con.responseCode
-        val fluxo = if (codigo in 200..299) con.inputStream else con.errorStream
-        val texto = fluxo?.bufferedReader()?.use { it.readText() } ?: ""
-        if (codigo !in 200..299) throw Exception("HTTP $codigo: $texto")
-
-        return JSONObject(texto)
-            .getJSONArray("choices")
-            .getJSONObject(0)
-            .getJSONObject("message")
-            .getString("content")
-    }
-}
+        con.setRequestProperty("Content-Type", 

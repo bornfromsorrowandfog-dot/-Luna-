@@ -18,7 +18,10 @@ import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.text.InputType
+import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.*
 import org.json.JSONArray
@@ -71,7 +74,7 @@ class MainActivity : Activity() {
     private var conversas = JSONArray()
     private var atual: JSONObject = JSONObject()
 
-    private lateinit var chat: TextView
+    private lateinit var blocoChat: LinearLayout
     private lateinit var rolagem: ScrollView
     private lateinit var entrada: EditText
     private lateinit var botaoMic: Button
@@ -87,12 +90,30 @@ class MainActivity : Activity() {
     private var tarefaAutorizada = false
     private var passos = 0
 
+    private val corFundo = 0xFF1A1030.toInt()
+    private val corBotao = 0xFF3A2A6B.toInt()
+    private val corBolhaLuna = 0xFF33265F.toInt()
+    private val corVerde = 0xFF14CC9E.toInt()
+    private val corLaranja = 0xFFC17C3E.toInt()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        window.statusBarColor = corFundo
+        window.navigationBarColor = corFundo
+
         val raiz = LinearLayout(this)
         raiz.orientation = LinearLayout.VERTICAL
-        raiz.setPadding(32, 120, 32, 32)
+        raiz.setBackgroundColor(corFundo)
+        raiz.setPadding(dp(12), 120, dp(12), dp(12))
+
+        val titulo = TextView(this)
+        titulo.text = "Luna"
+        titulo.textSize = 28f
+        titulo.setTypeface(null, Typeface.BOLD)
+        titulo.setTextColor(corVerde)
+        titulo.setPadding(dp(8), 0, dp(8), dp(8))
+        raiz.addView(titulo)
 
         botaoVoz = criarBotao("Voz: ligada") {
             falarRespostas = !falarRespostas
@@ -115,28 +136,34 @@ class MainActivity : Activity() {
         )
 
         rolagem = ScrollView(this)
-        chat = TextView(this)
-        chat.textSize = 16f
-        chat.setPadding(8, 16, 8, 16)
-        rolagem.addView(chat)
+        blocoChat = LinearLayout(this)
+        blocoChat.orientation = LinearLayout.VERTICAL
+        blocoChat.setPadding(dp(4), dp(8), dp(4), dp(8))
+        rolagem.addView(blocoChat)
         raiz.addView(
             rolagem,
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         )
 
-        botaoMic = criarBotao("Falar") { iniciarEscuta() }
+        botaoMic = criarBotao("Falar", corLaranja) { iniciarEscuta() }
+        botaoMic.textSize = 20f
+        botaoMic.setPadding(dp(16), dp(16), dp(16), dp(16))
         raiz.addView(botaoMic)
 
         val linha = LinearLayout(this)
         linha.orientation = LinearLayout.HORIZONTAL
+        linha.gravity = Gravity.CENTER_VERTICAL
         entrada = EditText(this)
         entrada.hint = "Digite sua mensagem"
         entrada.inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
-        linha.addView(
-            entrada,
-            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        )
-        linha.addView(criarBotao("Enviar") { enviarMensagem() })
+        entrada.setTextColor(0xFFFFFFFF.toInt())
+        entrada.setHintTextColor(0xFF8F86B0.toInt())
+        entrada.background = fundoArredondado(0xFF2A1F4D.toInt(), 20)
+        entrada.setPadding(dp(16), dp(10), dp(16), dp(10))
+        val lpEntrada = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        lpEntrada.setMargins(dp(4), dp(4), dp(4), dp(4))
+        linha.addView(entrada, lpEntrada)
+        linha.addView(criarBotao("Enviar", corVerde, corFundo) { enviarMensagem() })
         raiz.addView(linha)
 
         setContentView(raiz)
@@ -173,9 +200,27 @@ class MainActivity : Activity() {
 
     // ---------- interface ----------
 
-    private fun criarBotao(texto: String, acao: () -> Unit): Button {
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    private fun fundoArredondado(cor: Int, raio: Int): GradientDrawable {
+        val g = GradientDrawable()
+        g.setColor(cor)
+        g.cornerRadius = dp(raio).toFloat()
+        return g
+    }
+
+    private fun criarBotao(
+        texto: String,
+        cor: Int = corBotao,
+        corTexto: Int = 0xFFFFFFFF.toInt(),
+        acao: () -> Unit
+    ): Button {
         val b = Button(this)
         b.text = texto
+        b.setAllCaps(false)
+        b.setTextColor(corTexto)
+        b.background = fundoArredondado(cor, 24)
+        b.stateListAnimator = null
         b.setOnClickListener { acao() }
         return b
     }
@@ -184,30 +229,58 @@ class MainActivity : Activity() {
         val l = LinearLayout(this)
         l.orientation = LinearLayout.HORIZONTAL
         for (b in botoes) {
-            l.addView(
-                b,
-                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            )
+            val lp = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            lp.setMargins(dp(4), dp(4), dp(4), dp(4))
+            l.addView(b, lp)
         }
         return l
     }
 
-    private fun mostrar(texto: String) {
-        chat.append(texto + "\n\n")
+    private fun bolha(quem: String, texto: String) {
+        val tv = TextView(this)
+        tv.text = texto
+        tv.textSize = 16f
+        tv.maxWidth = (resources.displayMetrics.widthPixels * 0.8).toInt()
+        val lp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+        lp.setMargins(dp(4), dp(4), dp(4), dp(4))
+        if (quem == "user") {
+            tv.setTextColor(corFundo)
+            tv.background = fundoArredondado(corVerde, 18)
+            tv.setPadding(dp(14), dp(10), dp(14), dp(10))
+            lp.gravity = Gravity.END
+        } else if (quem == "assistant") {
+            tv.setTextColor(0xFFFFFFFF.toInt())
+            tv.background = fundoArredondado(corBolhaLuna, 18)
+            tv.setPadding(dp(14), dp(10), dp(14), dp(10))
+            lp.gravity = Gravity.START
+        } else {
+            tv.setTextColor(0xFFAAA3C2.toInt())
+            tv.textSize = 13f
+            tv.setPadding(dp(8), dp(4), dp(8), dp(4))
+            lp.gravity = Gravity.CENTER_HORIZONTAL
+        }
+        tv.layoutParams = lp
+        blocoChat.addView(tv)
         rolagem.post { rolagem.fullScroll(ScrollView.FOCUS_DOWN) }
     }
 
+    private fun mostrar(texto: String) {
+        bolha("sistema", texto)
+    }
+
     private fun redesenhar() {
-        chat.text = ""
+        blocoChat.removeAllViews()
         val msgs = atual.getJSONArray("mensagens")
         for (i in 0 until msgs.length()) {
             val m = msgs.getJSONObject(i)
             if (m.optBoolean("oculta", false)) continue
-            val quem = if (m.getString("role") == "user") "Você" else "Assistente"
             val conteudo = m.getString("content").replace(regexAcao, "").trim()
-            chat.append(quem + ": " + conteudo + "\n\n")
+            if (conteudo.isEmpty()) continue
+            bolha(if (m.getString("role") == "user") "user" else "assistant", conteudo)
         }
-        rolagem.post { rolagem.fullScroll(ScrollView.FOCUS_DOWN) }
     }
 
     // ---------- histórico ----------
@@ -593,7 +666,7 @@ class MainActivity : Activity() {
             JSONObject().put("role", "user").put("content", texto)
         )
         gravar(conv)
-        mostrar("Você: $texto")
+        bolha("user", texto)
         consultar(conv)
     }
 
@@ -663,7 +736,7 @@ class MainActivity : Activity() {
         )
         gravar(conv)
         if (texto.isNotEmpty()) {
-            mostrar("Assistente: $texto")
+            bolha("assistant", texto)
             falar(texto)
         }
         val achado = regexAcao.find(resposta)
@@ -796,4 +869,3 @@ class MainActivity : Activity() {
         return null
     }
 }
-

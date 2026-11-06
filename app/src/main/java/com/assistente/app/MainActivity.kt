@@ -78,7 +78,6 @@ class MainActivity : Activity() {
     private lateinit var rolagem: ScrollView
     private lateinit var entrada: EditText
     private lateinit var botaoMic: Button
-    private lateinit var botaoVoz: Button
 
     private var tts: TextToSpeech? = null
     private var ttsPronto = false
@@ -95,6 +94,7 @@ class MainActivity : Activity() {
     private val corBolhaLuna = 0xFF33265F.toInt()
     private val corVerde = 0xFF14CC9E.toInt()
     private val corLaranja = 0xFFC17C3E.toInt()
+    private val temaDialogo = android.R.style.Theme_DeviceDefault_Dialog_Alert
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -107,33 +107,28 @@ class MainActivity : Activity() {
         raiz.setBackgroundColor(corFundo)
         raiz.setPadding(dp(12), 120, dp(12), dp(12))
 
+        val cabecalho = LinearLayout(this)
+        cabecalho.orientation = LinearLayout.HORIZONTAL
+        cabecalho.gravity = Gravity.CENTER_VERTICAL
+
         val titulo = TextView(this)
         titulo.text = "Luna"
         titulo.textSize = 28f
         titulo.setTypeface(null, Typeface.BOLD)
         titulo.setTextColor(corVerde)
-        titulo.setPadding(dp(8), 0, dp(8), dp(8))
-        raiz.addView(titulo)
+        titulo.setPadding(dp(8), 0, dp(8), 0)
+        cabecalho.addView(
+            titulo,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        )
 
-        botaoVoz = criarBotao("Voz: ligada") {
-            falarRespostas = !falarRespostas
-            botaoVoz.text = if (falarRespostas) "Voz: ligada" else "Voz: desligada"
-            if (!falarRespostas) tts?.stop()
-        }
-        raiz.addView(linhaDeBotoes(criarBotao("Chave do Groq") { pedirChave() }, botaoVoz))
-        raiz.addView(
-            linhaDeBotoes(
-                criarBotao("Histórico") { mostrarHistorico() },
-                criarBotao("Novo chat") { novoChat() }
-            )
+        val botaoMenu = criarBotao("⋮") { abrirMenu() }
+        botaoMenu.textSize = 22f
+        cabecalho.addView(
+            botaoMenu,
+            LinearLayout.LayoutParams(dp(56), ViewGroup.LayoutParams.WRAP_CONTENT)
         )
-        raiz.addView(
-            linhaDeBotoes(
-                criarBotao("Ativar acessibilidade") {
-                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                }
-            )
-        )
+        raiz.addView(cabecalho)
 
         rolagem = ScrollView(this)
         blocoChat = LinearLayout(this)
@@ -283,6 +278,39 @@ class MainActivity : Activity() {
         }
     }
 
+    // ---------- menu e diálogos ----------
+
+    private fun AlertDialog.Builder.mostrarEscuro(): AlertDialog {
+        val d = show()
+        d.window?.setBackgroundDrawable(fundoArredondado(0xFF241846.toInt(), 20))
+        return d
+    }
+
+    private fun abrirMenu() {
+        val itens = arrayOf(
+            "Chave do Groq",
+            if (falarRespostas) "Voz: desligar" else "Voz: ligar",
+            "Histórico",
+            "Novo chat",
+            "Ativar acessibilidade"
+        )
+        AlertDialog.Builder(this, temaDialogo)
+            .setTitle("Luna")
+            .setItems(itens) { _, which ->
+                when (which) {
+                    0 -> pedirChave()
+                    1 -> {
+                        falarRespostas = !falarRespostas
+                        if (!falarRespostas) tts?.stop()
+                    }
+                    2 -> mostrarHistorico()
+                    3 -> novoChat()
+                    4 -> startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                }
+            }
+            .mostrarEscuro()
+    }
+
     // ---------- histórico ----------
 
     private fun arquivo() = File(filesDir, "conversas.json")
@@ -352,7 +380,7 @@ class MainActivity : Activity() {
             formato.format(Date(it.getLong("atualizado"))) + " - " + it.getString("titulo")
         }.toTypedArray()
 
-        val dialogo = AlertDialog.Builder(this)
+        val dialogo = AlertDialog.Builder(this, temaDialogo)
             .setTitle("Conversas (segure para apagar)")
             .setItems(titulos) { _, which ->
                 tts?.stop()
@@ -360,10 +388,10 @@ class MainActivity : Activity() {
                 redesenhar()
             }
             .setNegativeButton("Fechar", null)
-            .show()
+            .mostrarEscuro()
 
         dialogo.listView.setOnItemLongClickListener { _, _, pos, _ ->
-            AlertDialog.Builder(this)
+            AlertDialog.Builder(this, temaDialogo)
                 .setTitle("Apagar esta conversa?")
                 .setMessage(lista[pos].getString("titulo"))
                 .setPositiveButton("Apagar") { _, _ ->
@@ -371,7 +399,7 @@ class MainActivity : Activity() {
                     dialogo.dismiss()
                 }
                 .setNegativeButton("Cancelar", null)
-                .show()
+                .mostrarEscuro()
             true
         }
     }
@@ -400,7 +428,7 @@ class MainActivity : Activity() {
     private fun pedirChave() {
         val campo = EditText(this)
         campo.hint = "Cole a chave aqui"
-        AlertDialog.Builder(this)
+        AlertDialog.Builder(this, temaDialogo)
             .setTitle("Chave do Groq")
             .setView(campo)
             .setPositiveButton("Salvar") { _, _ ->
@@ -410,7 +438,7 @@ class MainActivity : Activity() {
                     .apply()
             }
             .setNegativeButton("Cancelar", null)
-            .show()
+            .mostrarEscuro()
     }
 
     // ---------- voz ----------
@@ -535,7 +563,7 @@ class MainActivity : Activity() {
     private fun pedir(p: List<String>) {
         val msg = descrever(p)
         if (emPrimeiroPlano) {
-            val b = AlertDialog.Builder(this).setTitle("Executar ação?").setCancelable(false)
+            val b = AlertDialog.Builder(this, temaDialogo).setTitle("Executar ação?").setCancelable(false)
             if (tarefaAutorizada) {
                 b.setMessage(msg)
                 b.setPositiveButton("Sim") { _, _ -> executarEContinuar(p) }
@@ -554,7 +582,7 @@ class MainActivity : Activity() {
                 }
                 b.setNegativeButton("Não") { _, _ -> finalizarTarefa("Ação cancelada.") }
             }
-            b.show()
+            b.mostrarEscuro()
         } else {
             val s = AssistenteService.instancia
             if (s == null) {

@@ -15,7 +15,8 @@
         </intent>
     </queries>
     <application
-        android:label="Assistente"
+        android:icon="@drawable/luna_icon"
+        android:label="Luna"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity android:name=".MainActivity" android:exported="true">
             <intent-filter>

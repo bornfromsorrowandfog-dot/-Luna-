@@ -204,7 +204,8 @@ class MainActivity : Activity() {
             val m = msgs.getJSONObject(i)
             if (m.optBoolean("oculta", false)) continue
             val quem = if (m.getString("role") == "user") "Você" else "Assistente"
-            chat.append(quem + ": " + m.getString("content") + "\n\n")
+            val conteudo = m.getString("content").replace(regexAcao, "").trim()
+            chat.append(quem + ": " + conteudo + "\n\n")
         }
         rolagem.post { rolagem.fullScroll(ScrollView.FOCUS_DOWN) }
     }
@@ -546,7 +547,5 @@ class MainActivity : Activity() {
     }
 
     private fun compactarOcultas(conv: JSONObject) {
-        val m = conv.getJSONArray("mensagens")}
-        for (i in 0 until m.length()) {
-            val o = m.getJSONObject(i)
-        }       
+        val m = conv.getJSONArray("mensagens")
+        for (i in 0 unt

@@ -546,7 +546,7 @@ class MainActivity : Activity() {
     }
 
     private fun compactarOcultas(conv: JSONObject) {
-        val m = conv.getJSONArray("mensagens")
+        val m = conv.getJSONArray("mensagens")}
         for (i in 0 until m.length()) {
             val o = m.getJSONObject(i)
-          
+        }       
